@@ -1,0 +1,141 @@
+provider "aws" {
+  region     = "us-west-2"
+  access_key = "?????"
+  secret_key = "??????????"
+  version = "~> 2.0"
+}
+#################################################################################################################################
+data "aws_ami" "ubuntu" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-trusty-14.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  owners = ["099720109477"] # Canonical
+}
+#################################################################################################################################
+
+resource "aws_key_pair" "drogou_keys" {
+  key_name   = "drogou-key"
+  public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEAvg5Pn2YaneXTN6T+Clsqc3JsmA4jJ+/7Kmh+IXFH3g5O4lLFH3rbsSx5bc0plEK2UWdORF6QuxuOdeqTdM6FEPr1cE+N+R87jld7PXa8wulF1f1905in/+lth8e4ajWAF6vzqIedY+66TH3HQnf9qlvQ1DBVnSeLjrwAk88y/s6F7VSj8gxPWQfmM8rGIvui6SFuwXXqbgbIWVEefOM8dav2c2584EPAKlFO8g7DL+NcxMuDY+JMbA2rCRGWtK8UTuKo3JfdG5Hq6dsxGoFVBvmjxpB7ibfYCynQIok0Bts5+pAN/as9cBYv9z8WE54KoF4UhHviYFdcyZ4rHdQzGw=="
+}
+#################################################################################################################################
+
+resource "aws_instance" "tp3_Drogou" {
+  ami = "${data.aws_ami.ubuntu.id}"
+  vpc_security_group_ids = ["${aws_security_group.allow_ssh.id}"]
+  instance_type = "t2.micro"
+  subnet_id = "${aws_subnet.drogou_sn.id}"
+  key_name = "${aws_key_pair.drogou_keys.key_name}"
+  tags = {
+    Name = "Is_This_A_VM"
+  }
+
+provisioner "remote-exec" {
+    inline = [
+      "sudo apt update -y",
+      "sudo apt install openjdk-8-jdk -y",
+#      "sudo apt install openjdk-8-jre -y",
+      "sudo apt install maven -y",
+      "sudo apt install git -y",
+      "git clone https://github.com/spring-projects/spring-petclinic.git",
+      "sudo ufw allow 8080",
+      "cd spring-petclinic",
+      "pwd",
+      "echo $JAVA_HOME",
+      "PATH=/programme/spring/apache-maven-2.2.1/bin:$PATH",
+	  "export JAVA_HOME=/usr/lib/jvm/java-8-oracle/",
+      "echo $JAVA_HOME",
+	#  "export PATH JAVA_HOME",
+	  "./mvnw package",
+	  "java -jar target/*.jar",
+	  "hostname -I"
+
+    ]
+  
+  connection {
+  	type = "ssh"
+  	user = "ubuntu"
+  	host = "${self.public_ip}"
+  	private_key = "${file("private_key_last")}"
+  }
+}
+
+}
+#################################################################################################################################
+
+## ouvrir le port 22 (ingress, tcp )pour se connecter  add security group and aws instance
+
+resource "aws_vpc" "drogou_vpc" {
+	cidr_block = "172.16.0.0/16"
+	enable_dns_hostnames = true
+	enable_dns_support = true
+
+	tags={
+		Name = "drogou_vpc"
+	}
+}
+#################################################################################################################################
+
+resource "aws_subnet" "drogou_sn"{
+	cidr_block = "${cidrsubnet(aws_vpc.drogou_vpc.cidr_block, 3, 1)}"
+	vpc_id = "${aws_vpc.drogou_vpc.id}"
+	availability_zone = "us-west-2a"
+	map_public_ip_on_launch = true
+
+	tags={
+		Name = "drogou_sn"
+	}
+
+} #aws key pair
+#################################################################################################################################
+
+resource "aws_internet_gateway" "drogou_igw"{
+	vpc_id = "${aws_vpc.drogou_vpc.id}"
+}
+#################################################################################################################################
+
+resource "aws_route_table" "drogou_rt"{
+	vpc_id = "${aws_vpc.drogou_vpc.id}"
+	route {
+		cidr_block = "0.0.0.0/0"
+		gateway_id = "${aws_internet_gateway.drogou_igw.id}"
+	}
+
+	tags ={
+		Name = "drogou_rt"
+	}
+}
+#################################################################################################################################
+
+resource "aws_route_table_association" "drogou_rta" {
+	subnet_id = "${aws_subnet.drogou_sn.id}"
+	route_table_id = "${aws_route_table.drogou_rt.id}"
+}
+#################################################################################################################################
+
+resource "aws_security_group" "allow_ssh"{
+	name = "allow_ssh"
+	vpc_id = "${aws_vpc.drogou_vpc.id}"
+
+	ingress{
+		from_port = 22
+		to_port =22
+		protocol = "tcp"
+		cidr_blocks = ["0.0.0.0/0"]
+	}
+
+	egress{
+		from_port = 0
+		to_port = 0
+		protocol = "-1"
+		cidr_blocks = ["0.0.0.0/0"]
+	}
+}
